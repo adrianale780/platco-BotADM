@@ -64,7 +64,7 @@ def cargar_tasas_historicas(callback_log):
     URL_HISTORICO = "https://api.dolarvzla.com/public/exchange-rate/list"
     
     # TU CLAVE DE ACCESO
-    MI_CLAVE = "c346de960a1b630e8063b54f89c7513ff9bd2216041863547d524793f048396c"
+    MI_CLAVE = "5700e8058a00adeacd3a31f14bdb6a450b552be593eb0f0ab1a4c6f7c18390dc"
     
     # Preparamos el pase de entrada (Header)
     headers = {
@@ -580,4 +580,5 @@ if __name__ == "__main__":
 
             except Exception as e:
                 st.error(f"❌ Error Crítico: {str(e)}")
+
     
