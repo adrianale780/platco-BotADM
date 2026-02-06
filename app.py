@@ -1,24 +1,14 @@
 
-import customtkinter as ctk
-from tkinter import filedialog, messagebox
+import streamlit as st
+import io
 import requests
 import openpyxl
 from datetime import datetime, timedelta
 import os
-import threading
-import time
 import re
 import unicodedata
 
-# --- CONFIGURACIÓN VISUAL ---
-ctk.set_appearance_mode("Light")
-ctk.set_default_color_theme("blue")
 
-try:
-    from PIL import Image
-    HAY_PIL = True
-except ImportError:
-    HAY_PIL = False
 
 # ==========================================
 # 🧠 UTILIDADES GENERALES
@@ -420,7 +410,7 @@ def procesar_conciliacion_compleja(wb, callback_log):
 # ==========================================
 # ORQUESTADOR PRINCIPAL
 # ==========================================
-def lógica_negocio(ruta_excel, callback_log, callback_progreso):
+def lógica_negocio(archivo_obj, callback_log, callback_progreso):
     mensajes = []
     wb = None
     try:
@@ -452,7 +442,7 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
 
         # 2. ABRIR EXCEL
         callback_log("📂 Leyendo archivo Excel...")
-        wb = openpyxl.load_workbook(ruta_excel)
+        wb = openpyxl.load_workbook(archivo_obj)
         callback_progreso(0.3)
 
         # 3. ACTUALIZAR PORTADA/HISTORICO
@@ -519,12 +509,14 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
         callback_progreso(0.9)
 
         # 7. GUARDAR
-        callback_log("💾 Guardando archivo...")
-        wb.save(ruta_excel)
+        callback_log("💾 Preparando descarga....")
+        output = io.BytesIO()
+        wb.save(output)
         wb.close()
+        output.seek(0)
         callback_progreso(1.0)
         
-        return True, "\n".join(mensajes)
+        return output, "\n".join(mensajes)
 
     except PermissionError:
         return False, "⚠️ CIERRA EL EXCEL. Está abierto y bloqueado."
@@ -532,96 +524,60 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
         return False, f"❌ Error técnico: {str(e)}"
 
 # ==========================================
-# INTERFAZ GRÁFICA
+# 🎮 INTERFAZ WEB (STREAMLIT)
 # ==========================================
-class AppFinanzas(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-        self.title("Sistema de Gestión Financiera AI")
-        self.geometry("600x700") 
-        self.resizable(False, False)
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=0)
-        self.grid_rowconfigure(1, weight=1)
-        self.grid_rowconfigure(2, weight=0)
-
-        self.frame_header = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_header.grid(row=0, column=0, pady=(20, 10))
-        logo_cargado = False
-        if HAY_PIL:
-            try:
-                ruta_logo = os.path.join(os.path.dirname(__file__), "logo.png")
-                img_logo = ctk.CTkImage(light_image=Image.open(ruta_logo), dark_image=Image.open(ruta_logo), size=(220, 90))
-                ctk.CTkLabel(self.frame_header, image=img_logo, text="").pack()
-                logo_cargado = True
-            except: pass
-        if not logo_cargado:
-            ctk.CTkLabel(self.frame_header, text="FINANZAS AUTOMATIZADAS", font=("Roboto", 24, "bold"), text_color="black").pack()
-
-        self.main_card = ctk.CTkFrame(self, fg_color="white", corner_radius=15, border_width=1, border_color="#E0E0E0")
-        self.main_card.grid(row=1, column=0, sticky="ew", padx=30, pady=10)
-        ctk.CTkLabel(self.main_card, text="Carga de Datos Mensual", font=("Roboto Medium", 14), text_color="gray").pack(pady=(20, 5), padx=20, anchor="w")
-        
-        self.frame_input = ctk.CTkFrame(self.main_card, fg_color="transparent")
-        self.frame_input.pack(fill="x", padx=20, pady=(0, 20))
-        self.entry_ruta = ctk.CTkEntry(self.frame_input, placeholder_text="Seleccionar archivo Excel...", height=35)
-        self.entry_ruta.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        ctk.CTkButton(self.frame_input, text="📂 Buscar", width=80, height=35, fg_color="#3B8ED0", command=self.buscar_archivo).pack(side="right")
-
-        self.lbl_status = ctk.CTkLabel(self.main_card, text="Esperando archivo...", font=("Roboto", 12))
-        self.lbl_status.pack(pady=(10, 5))
-        self.progress_bar = ctk.CTkProgressBar(self.main_card, width=450, height=12, corner_radius=5)
-        self.progress_bar.pack(pady=(0, 20))
-        self.progress_bar.set(0)
-
-        self.btn_procesar = ctk.CTkButton(self.main_card, text="EJECUTAR AUTOMATIZACIÓN", font=("Roboto", 15, "bold"), height=50, fg_color="#2CC985", state="disabled", text_color="white", command=self.iniciar_hilo)
-        self.btn_procesar.pack(fill="x", padx=20, pady=(0, 25))
-
-        self.frame_log = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_log.grid(row=2, column=0, sticky="nsew", padx=30, pady=(0, 20))
-        ctk.CTkLabel(self.frame_log, text="Registro de Actividad:", font=("Roboto", 11, "bold"), anchor="w", text_color="gray").pack(fill="x")
-        self.textbox_log = ctk.CTkTextbox(self.frame_log, height=180, corner_radius=10, font=("Consolas", 10), fg_color="#F0F0F0", text_color="black")
-        self.textbox_log.pack(fill="both")
-        self.textbox_log.configure(state="disabled")
-        self.ruta_seleccionada = ""
-
-    def log(self, mensaje):
-        self.textbox_log.configure(state="normal")
-        self.textbox_log.insert("end", f"> {mensaje}\n")
-        self.textbox_log.see("end")
-        self.textbox_log.configure(state="disabled")
-
-    def buscar_archivo(self):
-        archivo = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx")])
-        if archivo:
-            self.ruta_seleccionada = archivo
-            self.entry_ruta.delete(0, "end")
-            self.entry_ruta.insert(0, os.path.basename(archivo))
-            self.btn_procesar.configure(state="normal")
-            self.log(f"Archivo cargado: {os.path.basename(archivo)}")
-
-    def iniciar_hilo(self):
-        threading.Thread(target=self.ejecutar_proceso).start()
-
-    def ejecutar_proceso(self):
-        self.btn_procesar.configure(state="disabled", text="PROCESANDO...", fg_color="#E0A800")
-        self.lbl_status.configure(text="Trabajando...", text_color="#E0A800")
-        self.log("--- INICIANDO PROCESO ---")
-        exito, resultado = lógica_negocio(self.ruta_seleccionada, self.log, self.progress_bar.set)
-        if exito:
-            self.log("--- PROCESO EXITOSO ---")
-            self.progress_bar.set(1)
-            self.lbl_status.configure(text="¡Proceso Completado!", text_color="#2CC985")
-            self.btn_procesar.configure(text="¡LISTO! (CERRAR)", fg_color="#2CC985", command=self.destroy)
-            self.btn_procesar.configure(state="normal")
-            messagebox.showinfo("Éxito", f"¡Todo listo!\n\n{resultado}")
-        else:
-            self.log("--- ERROR ---")
-            self.progress_bar.set(0)
-            self.lbl_status.configure(text="Error", text_color="#FF4D4D")
-            self.btn_procesar.configure(state="normal", text="REINTENTAR", fg_color="#FF4D4D")
-            messagebox.showerror("Error", resultado)
-
 if __name__ == "__main__":
-    app = AppFinanzas()
-    app.mainloop()
+    st.set_page_config(page_title="Platco Bot Financiero", page_icon="💰")
+
+    # Cargar Logo si existe
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=200)
+
+    st.title("🤖 Sistema de Gestión Financiera AI")
+    st.markdown("---")
+
+    # Botón para subir archivo
+    uploaded_file = st.file_uploader("📂 Sube tu archivo Excel Financiero", type=["xlsx"])
+
+    if uploaded_file is not None:
+        st.success(f"Archivo cargado: {uploaded_file.name}")
+        
+        if st.button("🚀 EJECUTAR AUTOMATIZACIÓN", type="primary"):
+            
+            # Área de logs visual
+            log_container = st.empty()
+            logs_historial = []
+
+            def web_log(msg):
+                logs_historial.append(f"> {msg}")
+                # Muestra los últimos 10 mensajes
+                log_container.text("\n".join(logs_historial[-10:]))
+
+            bar = st.progress(0)
+
+            try:
+                web_log("--- INICIANDO PROCESO ---")
+                
+                # LLAMAMOS A TU LÓGICA (MODIFICADA EN EL PASO 2)
+                # Nota: Pasamos 'uploaded_file' directo, no una ruta.
+                archivo_resultado, texto_resultado = lógica_negocio(uploaded_file, web_log, bar.progress)
+                
+                web_log("--- FINALIZADO ---")
+                st.success("¡Proceso Terminado!")
+
+                # MOSTRAR LOGS COMPLETOS
+                with st.expander("Ver Reporte Detallado"):
+                    st.text(texto_resultado)
+
+                # BOTÓN DE DESCARGA
+                now = datetime.now().strftime("%Y%m%d_%H%M")
+                st.download_button(
+                    label="📥 DESCARGAR ARCHIVO PROCESADO",
+                    data=archivo_resultado,
+                    file_name=f"Finanzas_Procesado_{now}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+            except Exception as e:
+                st.error(f"❌ Error Crítico: {str(e)}")
+    
