@@ -508,15 +508,13 @@ def lógica_negocio(archivo_obj, callback_log, callback_progreso):
         
         callback_progreso(0.9)
 
-        # 7. GUARDAR
-        callback_log("💾 Preparando descarga....")
-        output = io.BytesIO()
-        wb.save(output)
+        # 7. GUARDAR (VERSIÓN SERVIDOR VPS)
+        callback_log("💾 Guardando archivo en el servidor...")
+        ruta_salida = "Resultado_Final.xlsx"
+        wb.save(ruta_salida)
         wb.close()
-        output.seek(0)
         callback_progreso(1.0)
-        
-        return output, "\n".join(mensajes)
+        return ruta_salida, "\n".join(mensajes)
 
     except PermissionError:
         return False, "⚠️ CIERRA EL EXCEL. Está abierto y bloqueado."
@@ -569,17 +567,19 @@ if __name__ == "__main__":
                 with st.expander("Ver Reporte Detallado"):
                     st.text(texto_resultado)
 
-                # BOTÓN DE DESCARGA
+                # BOTÓN DE DESCARGA (VERSIÓN VPS)
                 now = datetime.now().strftime("%Y%m%d_%H%M")
-                st.download_button(
-                    label="📥 DESCARGAR ARCHIVO PROCESADO",
-                    data=archivo_resultado,
-                    file_name=f"Finanzas_Procesado_{now}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                with open(archivo_resultado, "rb") as f:
+                    st.download_button(
+                        label="📥 DESCARGAR ARCHIVO PROCESADO",
+                        data=f,
+                        file_name=f"Finanzas_Procesado_{now}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
 
             except Exception as e:
                 st.error(f"❌ Error Crítico: {str(e)}")
 
     
+
 
