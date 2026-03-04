@@ -154,256 +154,314 @@ import re
 # ==========================================
 # Solo procesa Ingresos. Solo usa DATA BS. No toca Excedentes.
 
-def procesar_resumen_semanal(wb, callback_log):
-    # 1. CARGA SIMPLE
-    try:
-        # Buscamos las hojas clave
-        ws_resumen = None
-        ws_data = None
-        
-        for sheet in wb.sheetnames:
-            if "RESUMEN DISPONIBILIDAD" in sheet.upper():
-                ws_resumen = wb[sheet]
-            if "DATA BS" in sheet.upper():
-                ws_data = wb[sheet]
-                
-        if not ws_resumen or not ws_data:
-            callback_log("⚠️ Error: Faltan hojas (Resumen o Data BS).")
-            return 0
+def procesar_resumen_semanal(wb, ruta_excel, callback_log):
+    import re
+    import openpyxl
+    from openpyxl.utils import get_column_letter
+    import unicodedata
 
-    except Exception as e:
-        callback_log(f"❌ Error cargando hojas: {str(e)}")
+    # 1. Utilidades Internas
+    def normalizar_texto_local(texto):
+        if not texto: return ""
+        texto = str(texto).upper().strip()
+        return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
+
+    def limpiar_numero(valor):
+        if valor is None: return 0
+        if isinstance(valor, (int, float)): return float(valor)
+        txt = str(valor).strip().upper().replace("BS", "").replace("USD", "").replace(" ", "")
+        es_neg = False
+        if "(" in txt and ")" in txt:
+            es_neg = True
+            txt = txt.replace("(", "").replace(")", "")
+        if "." in txt and "," in txt: txt = txt.replace(".", "").replace(",", ".")
+        elif "," in txt: txt = txt.replace(",", ".")
+        try: return -float(txt) if es_neg else float(txt)
+        except: return 0
+
+    ws_resumen = None
+    ws_data = None
+    for sheet in wb.sheetnames:
+        norm_sheet = normalizar_texto_local(sheet)
+        if "RESUMEN DISPONIBILIDAD" in norm_sheet:
+            ws_resumen = wb[sheet]
+        if "DATA BS" in norm_sheet:
+            ws_data = wb[sheet]
+            
+    if not ws_resumen or not ws_data:
+        callback_log("⚠️ Error: Faltan hojas (Resumen o Data BS).")
         return 0
 
-    callback_log("📅 Procesando Resumen Semanal (Solo Ingresos)...")
+    callback_log("📅 Procesando Resumen Semanal en USD...")
 
-    # 2. DETECTAR SEMANAS
+    # --- LECTURA SEGURA: VALORES REALES (IGNORANDO FÓRMULAS) ---
+    callback_log("⏳ Extrayendo datos de semanas y dólares (modo lectura)...")
+    data_bs_lista = []
+    try:
+        # Abrimos el archivo en modo "solo resultados"
+        wb_lectura = openpyxl.load_workbook(ruta_excel, data_only=True, read_only=True)
+        ws_data_L = None
+        for sheet in wb_lectura.sheetnames:
+            if "DATA BS" in normalizar_texto_local(sheet):
+                ws_data_L = wb_lectura[sheet]
+                break
+        
+        if ws_data_L:
+            # Pasamos todo a la memoria RAM rapidísimo
+            for row in ws_data_L.iter_rows(min_row=4, values_only=True):
+                data_bs_lista.append(row)
+        wb_lectura.close()
+    except Exception as e:
+        callback_log(f"❌ Error leyendo DATA BS: {str(e)}")
+        return 0
+
+    # 3. DETECTAR SEMANAS EN EL ENCABEZADO DE RESUMEN
     fila_encabezado = 0
-    # Buscamos la fila que dice "SEMANA DEL..."
     for r in range(1, 15):
         for c in range(1, 20): 
             val = str(ws_resumen.cell(row=r, column=c).value).upper()
-            if "SEMANA" in val and "DEL" in val:
+            if "SEMANA" in val and any(char.isdigit() for char in val):
                 fila_encabezado = r
                 break
         if fila_encabezado > 0: break
     
     if fila_encabezado == 0: 
-        callback_log("⚠️ No encontré encabezados de semana.")
+        callback_log("⚠️ No encontré encabezados como 'SEMANA 1' en la hoja Resumen.")
         return 0
 
     semanas_config = [] 
-    for col in range(3, ws_resumen.max_column + 1):
+    for col in range(2, ws_resumen.max_column + 1):
         texto = str(ws_resumen.cell(row=fila_encabezado, column=col).value).upper()
-        match = re.search(r"(\d+)\s+AL\s+(\d+)", texto)
+        match = re.search(r"SEMANA\s*(\d+)", texto)
         if match:
-            dia_inicio, dia_fin = int(match.group(1)), int(match.group(2))
-            sub = str(ws_resumen.cell(row=fila_encabezado+1, column=col).value).upper()
+            num_semana = int(match.group(1))
+            sub = normalizar_texto_local(ws_resumen.cell(row=fila_encabezado+1, column=col).value)
             col_est, col_act = 0, 0
             
-            if "ACTUALIZACIÓN" in sub or "ACTUALIZACION" in sub:
+            if "ACTUALIZACION" in sub or "DIARIA" in sub:
                 col_act, col_est = col, col - 1
-            elif "ESTIMADO" in sub:
+            elif "ESTIMADO" in sub or "INICIAL" in sub:
                 col_est, col_act = col, col + 1
             
-            if col_est > 0:
+            if col_est > 0 and col_act > 0:
                 semanas_config.append({
-                    'min': dia_inicio, 'max': dia_fin,
+                    'semana': num_semana,
                     'col_est': col_est, 'col_act': col_act
                 })
 
-    # 3. SUMAR REAL (DATA BS)
-    acumulados_real = {i: {} for i in range(len(semanas_config))}
+    if not semanas_config:
+        callback_log("⚠️ No detecté columnas válidas de Estimado/Actualización.")
+        return 0
+
+    # 4. SUMAR REAL (DATA BS - LEYENDO DESDE LA MEMORIA)
+    acumulados_real = {cfg['semana']: {} for cfg in semanas_config}
     
-    for r in range(4, ws_data.max_row + 1):
-        try:
-            # Leer Fecha
-            raw_fecha = ws_data.cell(row=r, column=2).value
-            dia_dato = 0
-            if isinstance(raw_fecha, datetime): dia_dato = raw_fecha.day
-            elif raw_fecha:
-                txt = str(raw_fecha).strip()
-                if len(txt) >= 2 and txt[:2].isdigit(): dia_dato = int(txt[:2])
-            
-            if dia_dato == 0: continue
+    for row in data_bs_lista:
+        if len(row) < 17: continue # Aseguramos que la fila llega hasta la columna Q
+        
+        # Columna Q (Índice 16 en memoria)
+        val_semana = row[16]
+        if not val_semana: continue
+        
+        texto_semana = str(val_semana).upper()
+        match_sem = re.search(r"SEMANA\s*(\d+)", texto_semana)
+        if not match_sem: continue
+        semana_del_dato = int(match_sem.group(1))
 
-            # Leer Cuenta y Monto
-            cta = str(ws_data.cell(row=r, column=13).value).strip().upper()
-            
-            # Limpieza básica de número
-            val_monto = ws_data.cell(row=r, column=8).value
-            monto = 0
-            if val_monto:
-                if isinstance(val_monto, (int, float)): monto = float(val_monto)
-                else:
-                    try: monto = float(str(val_monto).replace(",", "").strip())
-                    except: pass
+        # Columna M (Índice 12 en memoria)
+        cta = normalizar_texto_local(row[12])
+        if not cta: continue
+        
+        # Columna H (Índice 7 en memoria) - DÓLARES
+        monto = limpiar_numero(row[7])
 
-            if monto != 0:
-                for i, cfg in enumerate(semanas_config):
-                    if cfg['min'] <= dia_dato <= cfg['max']:
-                        if cta not in acumulados_real[i]: acumulados_real[i][cta] = 0
-                        acumulados_real[i][cta] += monto
-                        break 
-        except: continue
+        if monto != 0 and semana_del_dato in acumulados_real:
+            if cta not in acumulados_real[semana_del_dato]: 
+                acumulados_real[semana_del_dato][cta] = 0
+            acumulados_real[semana_del_dato][cta] += monto
 
-    # 4. ESCRIBIR EN RESUMEN (SOLO INGRESOS)
-    cuentas_ingresos = ["CONTINUIDAD OPERATIVA", "SIMCARD", "ALIADOS COMERCIALES"]
+    # 5. ESCRIBIR EN RESUMEN
+    cuentas_ingresos = ["CONTINUIDAD OPERATIVA", "SIMCARD", "ALIADOS COMERCIALES", "BANCO MERCANTIL 20% TX"]
     start_row = fila_encabezado + 2 
     cambios = 0
     
     for r in range(start_row, ws_resumen.max_row + 1):
-        val_cta = ws_resumen.cell(row=r, column=2).value 
-        if not val_cta: continue
-        nombre = str(val_cta).strip().upper().replace("\xa0", "")
+        # Escaneamos las primeras 3 columnas (A, B, C) por si el texto está indentado o movido
+        nombre = ""
+        for c in range(1, 4):
+            val_cta = ws_resumen.cell(row=r, column=c).value
+            if val_cta:
+                nombre_temp = normalizar_texto_local(val_cta)
+                if any(cta_valida in nombre_temp for cta_valida in cuentas_ingresos):
+                    nombre = nombre_temp
+                    break
+        
+        if not nombre: continue # Si no encuentra cuenta válida, salta a la siguiente fila
 
-        if nombre in cuentas_ingresos:
-            for i, cfg in enumerate(semanas_config):
-                # Sumamos lo real de DATA BS
-                monto_real = 0
-                for k, v in acumulados_real[i].items():
-                    if nombre in k or k in nombre: monto_real += v
+        for cfg in semanas_config:
+            num_sem = cfg['semana']
+            monto_real = 0
+            
+            for k, v in acumulados_real[num_sem].items():
+                if nombre in k or k in nombre: 
+                    monto_real += v
+            
+            valor_estimado = ws_resumen.cell(row=r, column=cfg['col_est']).value
+            
+            # Si hay estimado manual o hubo movimientos reales, reescribimos la fórmula
+            if valor_estimado or monto_real != 0:
+                letra_est = get_column_letter(cfg['col_est'])
+                monto_formateado = round(monto_real, 2)
                 
-                # Vemos si hay Estimado manual escrito
-                valor_estimado = ws_resumen.cell(row=r, column=cfg['col_est']).value
-                
-                # Si hay estimado O hubo movimiento real, ponemos la fórmula
-                if valor_estimado or monto_real != 0:
-                    letra = get_column_letter(cfg['col_est'])
-                    # FÓRMULA: =ESTIMADO - REAL
-                    ws_resumen.cell(row=r, column=cfg['col_act']).value = f"={letra}{r}-{monto_real}"
-                    ws_resumen.cell(row=r, column=cfg['col_act']).number_format = '#,##0.00'
-                    cambios += 1
+                # FÓRMULA: =ESTIMADO - REAL
+                ws_resumen.cell(row=r, column=cfg['col_act']).value = f"={letra_est}{r}-{monto_formateado}"
+                ws_resumen.cell(row=r, column=cfg['col_act']).number_format = '#,##0.00'
+                cambios += 1
 
     return cambios
 
 from datetime import datetime
 
-# =========================================================================
-# ⚖️ LÓGICA V22: CONCILIACIÓN FINAL (DATA BS + EXCEDENTES BP/BM COL H)
-# =========================================================================
+def procesar_conciliacion_compleja(wb, ruta_excel, callback_log):
+    from datetime import datetime
+    import openpyxl
 
-def procesar_conciliacion_compleja(wb, callback_log):
-    
-    # --- Limpiador de números (Formato Venezuela) ---
+    # 1. Limpiador de números
     def limpiar_venezuela(valor):
         if not valor: return 0
         if isinstance(valor, (int, float)): return float(valor)
-        
-        txt = str(valor).strip().upper()
-        txt = txt.replace("BS", "").replace("USD", "").replace(" ", "")
-        
-        es_negativo = False
+        txt = str(valor).strip().upper().replace("BS", "").replace("USD", "").replace(" ", "")
+        es_neg = False
         if "(" in txt and ")" in txt:
-            es_negativo = True
+            es_neg = True
             txt = txt.replace("(", "").replace(")", "")
-        
-        if "." in txt and "," in txt:
-            txt = txt.replace(".", "").replace(",", ".")
-        elif "," in txt: 
-            txt = txt.replace(",", ".")
-            
-        try:
-            num = float(txt)
-            return -num if es_negativo else num
+        if "." in txt and "," in txt: txt = txt.replace(".", "").replace(",", ".")
+        elif "," in txt: txt = txt.replace(",", ".")
+        try: return -float(txt) if es_neg else float(txt)
         except: return 0
 
-    # 1. Cargar Hojas
+    # 2. Extractor de Mes Inteligente
+    def extraer_mes_inteligente(valor_fecha):
+        if not valor_fecha: return ""
+        if isinstance(valor_fecha, datetime): return obtener_nombre_mes_es(valor_fecha.month)
+        
+        txt = str(valor_fecha).strip().upper()
+        
+        for i in range(1, 13):
+            nombre = obtener_nombre_mes_es(i)
+            if nombre in txt: return nombre
+            
+        formatos = ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%y", "%d-%m-%Y", "%d/%m/%y", "%m/%d/%Y", "%m-%Y", "%m/%Y"]
+        txt_solo_fecha = txt.split(" ")[0]
+        for fmt in formatos:
+            try: return obtener_nombre_mes_es(datetime.strptime(txt_solo_fecha, fmt).month)
+            except: pass
+            
+        abreviaturas = {"ENE": "ENERO", "FEB": "FEBRERO", "MAR": "MARZO", "ABR": "ABRIL", "MAY": "MAYO", "JUN": "JUNIO", "JUL": "JULIO", "AGO": "AGOSTO", "SEP": "SEPTIEMBRE", "OCT": "OCTUBRE", "NOV": "NOVIEMBRE", "DIC": "DICIEMBRE"}
+        for abrv, completo in abreviaturas.items():
+            if abrv in txt: return completo
+
+        return normalizar_texto(txt)
+
+    # 3. Matcher de Bancos Flexible
+    def bancos_coinciden(b1, b2):
+        if not b1 or not b2: return False
+        if "PROVINCIAL" in b1 and "PROVINCIAL" in b2: return True
+        if "MERCANTIL" in b1 and "MERCANTIL" in b2: return True
+        return (b1 in b2) or (b2 in b1)
+
     ws_apartados = obtener_hoja_flexible(wb, "APARTADOS")
     ws_data = obtener_hoja_flexible(wb, "DATA BS")
-    ws_excedente = obtener_hoja_flexible(wb, "MANEJO EXCEDENTE") # Busca "MANEJO DE EXCEDENTES"
 
-    if not (ws_apartados and ws_data and ws_excedente):
-        callback_log("⚠️ Error: Faltan hojas para conciliación.")
+    if not ws_apartados or not ws_data:
+        callback_log("⚠️ Error: Faltan hojas base.")
         return 0 
 
-    callback_log("⚖️ Conciliación V22: Data BS + Excedentes (Etiquetas BP/BM -> Col H)...")
+    # --- LECTURA SEGURA: FÓRMULAS DIRECTO DEL ARCHIVO ORIGINAL ---
+    callback_log("⏳ Extrayendo fórmulas de Excedentes (sin bloqueos)...")
+    excedentes_lista = []
+    try:
+        # Lee el archivo directamente del disco (rápido y a prueba de errores)
+        wb_lectura = openpyxl.load_workbook(ruta_excel, data_only=True, read_only=True)
+        ws_exc_L = obtener_hoja_flexible(wb_lectura, "MANEJO EXCEDENTE")
+        if ws_exc_L:
+            for row in ws_exc_L.iter_rows(min_row=4, max_row=2000, values_only=True):
+                excedentes_lista.append(row)
+        wb_lectura.close() # Cierra inmediatamente
+    except Exception as e:
+        callback_log(f"❌ Error leyendo fórmulas: {str(e)}")
+        return 0
+
     cambios = 0
     
-    # 2. Recorremos hoja APARTADOS
+    # Recorremos hoja APARTADOS
     for fila in range(4, ws_apartados.max_row + 1):
         celda_banco = ws_apartados.cell(row=fila, column=2)
         celda_monto = ws_apartados.cell(row=fila, column=3)
         celda_concepto = ws_apartados.cell(row=fila, column=4)
         celda_mes = ws_apartados.cell(row=fila, column=5)
         
-        concepto = str(celda_concepto.value).upper().strip() if celda_concepto.value else ""
+        concepto = normalizar_texto(celda_concepto.value) if celda_concepto.value else ""
         
-        # FILTRO: Solo procesamos "SERVICIO ESPECIALIZADO"
         if "ESPECIALIZAD" in concepto:
-            banco_objetivo = str(celda_banco.value).upper().strip() 
-            mes_objetivo = str(celda_mes.value).upper().strip()     
-            
-            # -------------------------------------------------------------
-            # PASO A: Sumar Egresos (DATA BS) -> Esto da los -103M
-            # -------------------------------------------------------------
+            banco_objetivo = normalizar_texto(celda_banco.value) 
+            mes_objetivo = extraer_mes_inteligente(celda_mes.value)
+
+            # --- PASO A: Sumar Egresos (DATA BS) ---
             suma_data_bs = 0
             for r in range(4, ws_data.max_row + 1):
-                d_cuenta = str(ws_data.cell(row=r, column=13).value).upper().strip()
-                d_banco = str(ws_data.cell(row=r, column=10).value).upper().strip()
+                val_cta = ws_data.cell(row=r, column=13).value
+                val_banco = ws_data.cell(row=r, column=10).value
                 d_fecha = ws_data.cell(row=r, column=2).value
+                
+                d_cuenta = normalizar_texto(val_cta)
+                d_banco = normalizar_texto(val_banco)
                 d_monto = limpiar_venezuela(ws_data.cell(row=r, column=7).value)
                 
                 if d_monto != 0:
-                    mes_fila = obtener_nombre_mes_es(d_fecha.month if isinstance(d_fecha, datetime) else 0)
-                    if ("ESPECIALIZAD" in d_cuenta) and (banco_objetivo in d_banco or d_banco in banco_objetivo) and (mes_fila == mes_objetivo):
+                    mes_fila = extraer_mes_inteligente(d_fecha)
+                    if ("ESPECIALIZAD" in d_cuenta) and bancos_coinciden(banco_objetivo, d_banco) and mes_objetivo and mes_fila and (mes_objetivo in mes_fila or mes_fila in mes_objetivo):
                         suma_data_bs += d_monto
 
-            # -------------------------------------------------------------
-            # PASO B: Sumar Ingresos (MANEJO EXCEDENTE) -> Esto da los +43M
-            # -------------------------------------------------------------
+            # --- PASO B: Sumar Ingresos (MANEJO EXCEDENTE) desde la RAM ---
             suma_excedente = 0
-            
-            # ¿Qué etiqueta buscamos según el banco?
-            etiqueta_banco = ""
-            if "PROVINCIAL" in banco_objetivo:
-                etiqueta_banco = "BP"
-            elif "MERCANTIL" in banco_objetivo:
-                etiqueta_banco = "BM"
+            etiqueta_banco = "BP" if "PROVINCIAL" in banco_objetivo else ("BM" if "MERCANTIL" in banco_objetivo else "")
             
             if etiqueta_banco != "":
-                # Recorremos Excedentes buscando esa etiqueta en la descripción
-                max_r = max(ws_excedente.max_row, 500)
-                for r in range(4, max_r + 1):
-                    # 1. Descripción (Col B)
-                    val_desc = ws_excedente.cell(row=r, column=2).value
-                    e_desc = str(val_desc).upper().strip() if val_desc else ""
+                for row_exc in excedentes_lista:
+                    if len(row_exc) < 8: continue
                     
-                    # 2. Mes (Col C)
-                    val_mes = ws_excedente.cell(row=r, column=3).value
-                    e_mes = str(val_mes).upper().strip() if val_mes else ""
+                    val_desc = row_exc[1] # Columna B (Índice 1)
+                    if not val_desc: continue
+                    e_desc = normalizar_texto(val_desc)
                     
-                    # 3. FILTRO MAGISTRAL:
-                    # - ¿La descripción tiene "BP" o "BM" (según corresponda)?
-                    # - ¿Es el mes correcto?
-                    # - ¿Es Servicio Especializado?
-                    if (etiqueta_banco in e_desc) and ("ESPECIALIZAD" in e_desc) and (mes_objetivo == e_mes):
-                        
-                        # 4. CAPTURA: Tomamos el dinero de la COLUMNA H (8)
-                        val_h = ws_excedente.cell(row=r, column=8).value
+                    val_mes = row_exc[2] # Columna C (Índice 2)
+                    mes_exc = extraer_mes_inteligente(val_mes)
+                    
+                    e_desc_clean = e_desc.replace(" ", "").replace(".", "")
+                    banco_match = False
+                    if "PROVINCIAL" in banco_objetivo and ("BP" in e_desc_clean or "PROVINCIAL" in e_desc_clean):
+                        banco_match = True
+                    elif "MERCANTIL" in banco_objetivo and ("BM" in e_desc_clean or "MERCANTIL" in e_desc_clean):
+                        banco_match = True
+
+                    if ("ESPECIALIZAD" in e_desc) and banco_match and mes_objetivo and mes_exc and (mes_objetivo in mes_exc or mes_exc in mes_objetivo):
+                        val_h = row_exc[7] # Columna H (Índice 7)
                         monto_h = limpiar_venezuela(val_h)
                         
                         if monto_h != 0:
-                            suma_excedente += monto_h
-                            # Log para verificar
-                            # callback_log(f"   ➕ Encontrado {etiqueta_banco} en fila {r}: {monto_h:,.2f} (Col H)")
+                            suma_excedente += monto_h 
 
-            # -------------------------------------------------------------
-            # PASO C: Cálculo Final (-103 + 43 = -60)
-            # -------------------------------------------------------------
-            if suma_data_bs > 0 or suma_excedente > 0:
-                # Egresos restan (negativo) + Ingresos suman (positivo)
+            # --- PASO C: Cálculo Final ---
+            if suma_data_bs != 0 or suma_excedente != 0:
                 resultado_final = (suma_data_bs * -1) + suma_excedente
-                
                 celda_monto.value = resultado_final
                 celda_monto.number_format = '#,##0.00'
                 cambios += 1
-                
-                # Reporte en el log
-                if suma_excedente > 0:
-                    callback_log(f"   ✅ APARTADOS ({banco_objetivo}): {resultado_final:,.2f} (Incluye +{suma_excedente:,.2f} de Excedentes)")
-                else:
-                    callback_log(f"   📉 APARTADOS ({banco_objetivo}): {resultado_final:,.2f} (Solo Data BS)")
+                if suma_excedente > 0: 
+                    callback_log(f"   ✅ {banco_objetivo} {mes_objetivo}: {resultado_final:,.2f} (+{suma_excedente:,.2f} Exced.)")
+                else: 
+                    callback_log(f"   📉 {banco_objetivo} {mes_objetivo}: {resultado_final:,.2f} (Solo Data BS)")
 
     return cambios
 
@@ -496,13 +554,13 @@ def lógica_negocio(archivo_obj, callback_log, callback_progreso):
         callback_progreso(0.6)
 
         # 5. CONCILIACIÓN
-        cambios_conc = procesar_conciliacion_compleja(wb, callback_log)
+        cambios_conc = procesar_conciliacion_compleja(wb, ruta_excel, callback_log)
         if cambios_conc > 0: mensajes.append("✅ Conciliación Exitosa")
 
         callback_progreso(0.8)
         
         # 6. RESUMEN SEMANAL (CORREGIDO)
-        cambios_sem = procesar_resumen_semanal(wb, callback_log)
+        cambios_sem = procesar_resumen_semanal(wb, ruta_excel, callback_log)
         if cambios_sem > 0: mensajes.append(f"✅ Resumen Semanal Actualizado ({cambios_sem} celdas)")
         else: mensajes.append("ℹ️ Resumen Semanal: Sin cambios nuevos")
         
@@ -581,5 +639,6 @@ if __name__ == "__main__":
                 st.error(f"❌ Error Crítico: {str(e)}")
 
     
+
 
 
