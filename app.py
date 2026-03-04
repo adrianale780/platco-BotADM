@@ -499,9 +499,16 @@ def lógica_negocio(archivo_obj, callback_log, callback_progreso):
         callback_progreso(0.1)
 
         # 2. ABRIR EXCEL
-        callback_log("📂 Leyendo archivo Excel...")
-        wb = openpyxl.load_workbook(archivo_obj)
-        callback_progreso(0.3)
+callback_log("📁 Leyendo archivo Excel...")
+
+import tempfile
+# Guardamos el archivo flotante en el disco duro temporalmente
+with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+    tmp.write(archivo_obj.getvalue())
+    ruta_excel = tmp.name # ¡Aquí nace la variable que faltaba!
+
+# Ahora abrimos el archivo físico seguro
+wb = openpyxl.load_workbook(ruta_excel)
 
         # 3. ACTUALIZAR PORTADA/HISTORICO
         if precio_dolar_hoy > 0:
@@ -639,6 +646,7 @@ if __name__ == "__main__":
                 st.error(f"❌ Error Crítico: {str(e)}")
 
     
+
 
 
 
