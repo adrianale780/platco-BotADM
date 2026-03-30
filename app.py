@@ -564,9 +564,8 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
         
         callback_progreso(0.9)
 
-       # 7. GUARDAR (CON ESCUDO DE MEMORIA RAM)
+      # 7. GUARDAR
         callback_log("💾 Guardando archivo...")
-        
         try:
             import io
             # 1. Creamos un espacio temporal en la memoria RAM
@@ -584,7 +583,6 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
 
         except PermissionError:
             return False, "⚠️ CIERRA EL EXCEL. Está abierto y bloqueado."
-            
         except Exception as e:
             return False, f"❌ Error técnico: {str(e)}"
 
