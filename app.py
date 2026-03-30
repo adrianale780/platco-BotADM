@@ -565,28 +565,28 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
         callback_progreso(0.9)
 
        # 7. GUARDAR (CON ESCUDO DE SEGURIDAD)
-    callback_log("💾 Guardando archivo...")
+        callback_log("💾 Guardando archivo...")
 
-    try:
-        wb.save(ruta_excel)
-        
         try:
-            wb.close()
-        except Exception:
-            pass
-            
-        callback_progreso(1.0)
-        return True, "\n".join(mensajes)
-
-    except PermissionError:
-        return False, "⚠️ CIERRA EL EXCEL. Está abierto y bloqueado."
-    
-    except Exception as e:
-        if "Bad file descriptor" in str(e):
-            callback_progreso(1.0)
-            return True, "\n".join(mensajes) + "\n⚠️ Nota: El archivo se guardó (ignora aviso de descriptor)."
+            wb.save(ruta_excel)
         
-        return False, f"❌ Error técnico: {str(e)}"
+            try:
+                wb.close()
+            except Exception:
+                pass
+            
+            callback_progreso(1.0)
+            return True, "\n".join(mensajes)
+
+        except PermissionError:
+            return False, "⚠️ CIERRA EL EXCEL. Está abierto y bloqueado."
+    
+        except Exception as e:
+            if "Bad file descriptor" in str(e):
+                callback_progreso(1.0)
+                return True, "\n".join(mensajes) + "\n⚠️ Nota: El archivo se guardó (ignora aviso de descriptor)."
+        
+            return False, f"❌ Error técnico: {str(e)}"
 
 # --- AQUÍ TERMINA LA FUNCIÓN LÓGICA ---
 # Asegúrate de que no queden líneas sueltas de 'except' o 'try' aquí abajo
