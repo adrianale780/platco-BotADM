@@ -566,28 +566,17 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
 
       # 7. GUARDAR
         callback_log("💾 Guardando archivo...")
-        try:
-            import io
-            # 1. Creamos un espacio temporal en la memoria RAM
-            buffer = io.BytesIO()
-            
-            # 2. Guardamos el Excel en la RAM (Aquí ya no chocará con Hostinger)
-            wb.save(buffer)
-            
-            # 3. Escribimos el archivo final en el disco duro de un solo golpe
-            with open(ruta_excel, "wb") as f:
-                f.write(buffer.getvalue())
-                
-            callback_progreso(1.0)
-            return True, "\n".join(mensajes)
+        wb.save(ruta_excel)
+        wb.close()
+        callback_progreso(1.0)
+        
+        return True, "\n".join(mensajes)
 
-        except PermissionError:
-            return False, "⚠️ CIERRA EL EXCEL. Está abierto y bloqueado."
-        except Exception as e:
-            return False, f"❌ Error técnico: {str(e)}"
+    except PermissionError:
+        return False, "⚠️ CIERRA EL EXCEL. Está abierto y bloqueado."
+    except Exception as e:
+        return False, f"❌ Error técnico: {str(e)}"
 
-# --- AQUÍ TERMINA LA FUNCIÓN LÓGICA ---
-# Asegúrate de que no queden líneas sueltas de 'except' o 'try' aquí abajo
 
    
 
