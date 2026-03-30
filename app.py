@@ -64,7 +64,7 @@ def cargar_tasas_historicas(callback_log):
     URL_HISTORICO = "https://api.dolarvzla.com/public/exchange-rate/list"
     
     # TU CLAVE DE ACCESO
-    MI_CLAVE = "32a9c12d363b586aa8da1ac99ff428d2a1851b4d9fb445e921b1ec4df8080426"
+    MI_CLAVE = "39257c30e45164201765c7392f06f3ecb502f5c1a8116482cd7e9f3574cedec3"
     
     # Preparamos el pase de entrada (Header)
     headers = {
@@ -183,7 +183,7 @@ def procesar_resumen_semanal(wb, ruta_excel, callback_log):
     ws_data = None
     for sheet in wb.sheetnames:
         norm_sheet = normalizar_texto_local(sheet)
-        if "RESUMEN DISPONIBILIDAD" in norm_sheet:
+        if "FLUJO DE CAJA" in norm_sheet:
             ws_resumen = wb[sheet]
         if "DATA BS" in norm_sheet:
             ws_data = wb[sheet]
@@ -272,8 +272,8 @@ def procesar_resumen_semanal(wb, ruta_excel, callback_log):
         cta = normalizar_texto_local(row[12])
         if not cta: continue
         
-        # Columna H (Índice 7 en memoria) - DÓLARES
-        monto = limpiar_numero(row[7])
+        # Columna G (Índice 6 en memoria) - BS
+        monto = limpiar_numero(row[6])
 
         if monto != 0 and semana_del_dato in acumulados_real:
             if cta not in acumulados_real[semana_del_dato]: 
@@ -281,7 +281,7 @@ def procesar_resumen_semanal(wb, ruta_excel, callback_log):
             acumulados_real[semana_del_dato][cta] += monto
 
     # 5. ESCRIBIR EN RESUMEN
-    cuentas_ingresos = ["CONTINUIDAD OPERATIVA", "SIMCARD", "ALIADOS COMERCIALES", "BANCO MERCANTIL 20% TX"]
+    cuentas_ingresos = ["CONTINUIDAD OPERATIVA", "SIMCARD", "ALIADOS COMERCIALES", "BANCO MERCANTIL 20% TX", "BANCO PROVINCIAL 20% TX"]
     start_row = fila_encabezado + 2 
     cambios = 0
     
@@ -320,7 +320,6 @@ def procesar_resumen_semanal(wb, ruta_excel, callback_log):
 
     return cambios
 
-from datetime import datetime
 
 def procesar_conciliacion_compleja(wb, ruta_excel, callback_log):
     from datetime import datetime
@@ -468,7 +467,7 @@ def procesar_conciliacion_compleja(wb, ruta_excel, callback_log):
 # ==========================================
 # ORQUESTADOR PRINCIPAL
 # ==========================================
-def lógica_negocio(archivo_obj, callback_log, callback_progreso):
+def lógica_negocio(ruta_excel, callback_log, callback_progreso):
     mensajes = []
     wb = None
     try:
@@ -499,13 +498,7 @@ def lógica_negocio(archivo_obj, callback_log, callback_progreso):
         callback_progreso(0.1)
 
         # 2. ABRIR EXCEL
-        callback_log("📁 Leyendo archivo Excel...")
-        
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            tmp.write(archivo_obj.getvalue())
-            ruta_excel = tmp.name 
-            
+        callback_log("📂 Leyendo archivo Excel...")
         wb = openpyxl.load_workbook(ruta_excel)
         callback_progreso(0.3)
 
@@ -525,7 +518,7 @@ def lógica_negocio(archivo_obj, callback_log, callback_progreso):
                     ws_hist.cell(row=fila, column=3, value=precio_dolar_hoy)
                     mensajes.append("✅ Tasa Histórica Agregada")
 
-        # 4. CLASIFICACIÓN Y CÁLCULO USD (ESTRICTO V11)
+         # 4. CLASIFICACIÓN Y CÁLCULO USD (ESTRICTO V11)
         callback_log("🚀 Clasificando y Calculando Divisas...")
         ws_data = obtener_hoja_flexible(wb, "DATA BS")
         if ws_data:
@@ -559,26 +552,25 @@ def lógica_negocio(archivo_obj, callback_log, callback_progreso):
         
         callback_progreso(0.6)
 
+       
         # 5. CONCILIACIÓN
         cambios_conc = procesar_conciliacion_compleja(wb, ruta_excel, callback_log)
-        if cambios_conc > 0: mensajes.append("✅ Conciliación Exitosa")
-
-        callback_progreso(0.8)
+        
         
         # 6. RESUMEN SEMANAL (CORREGIDO)
-        cambios_sem = procesar_resumen_semanal(wb, ruta_excel, callback_log)
-        if cambios_sem > 0: mensajes.append(f"✅ Resumen Semanal Actualizado ({cambios_sem} celdas)")
-        else: mensajes.append("ℹ️ Resumen Semanal: Sin cambios nuevos")
+        #cambios_sem = procesar_resumen_semanal(wb, ruta_excel, callback_log)
+        #if cambios_sem > 0: mensajes.append(f"✅ Resumen Semanal Actualizado ({cambios_sem} celdas)")
+        #else: mensajes.append("ℹ️ Resumen Semanal: Sin cambios nuevos")
         
         callback_progreso(0.9)
 
-        # 7. GUARDAR (VERSIÓN SERVIDOR VPS)
-        callback_log("💾 Guardando archivo en el servidor...")
-        ruta_salida = "Resultado_Final.xlsx"
-        wb.save(ruta_salida)
+        # 7. GUARDAR
+        callback_log("💾 Guardando archivo...")
+        wb.save(ruta_excel)
         wb.close()
         callback_progreso(1.0)
-        return ruta_salida, "\n".join(mensajes)
+        
+        return True, "\n".join(mensajes)
 
     except PermissionError:
         return False, "⚠️ CIERRA EL EXCEL. Está abierto y bloqueado."
