@@ -566,18 +566,19 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
 
       # 7. GUARDAR
         callback_log("💾 Guardando archivo...")
-        wb.save(ruta_excel)
+        nombre_salida = "Resultado_Finanzas.xlsx"
+        wb.save(nombre_salida)
         #wb.close()#
         callback_progreso(1.0)
         
-        return True, "\n".join(mensajes)
+        return nombre_salida, "\n".join(mensajes)
 
     except PermissionError:
         return False, "⚠️ CIERRA EL EXCEL. Está abierto y bloqueado."
     except Exception as e:
         if "Bad file descriptor" in str(e):
             callback_progreso(1.0)
-            return ruta_excel, "\n".join(mensajes)
+            return nombre_salida, "\n".join(mensajes)
         return False, f"❌ Error técnico: {str(e)}"
 
 
@@ -630,14 +631,15 @@ if __name__ == "__main__":
                     st.text(texto_resultado)
 
                 # BOTÓN DE DESCARGA (VERSIÓN VPS)
-                now = datetime.now().strftime("%Y%m%d_%H%M")
-                with open(archivo_resultado, "rb") as f:
-                    st.download_button(
-                        label="📥 DESCARGAR ARCHIVO PROCESADO",
-                        data=f,
-                        file_name=f"Finanzas_Procesado_{now}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                if archivo_resultado != False:
+                    now = datetime.now().strftime("%Y%m%d_%H%M")
+                    with open(archivo_resultado, "rb") as f:
+                        st.download_button(
+                            label="📥 DESCARGAR ARCHIVO PROCESADO",
+                            data=f,
+                            file_name=f"Finanzas_Procesado_{now}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
 
             except Exception as e:
                 st.error(f"❌ Error Crítico: {str(e)}")
