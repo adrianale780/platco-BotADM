@@ -575,6 +575,9 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
     except PermissionError:
         return False, "⚠️ CIERRA EL EXCEL. Está abierto y bloqueado."
     except Exception as e:
+        if "Bad file descriptor" in str(e):
+            callback_progreso(1.0)
+            return True, "\n".join(mensajes)
         return False, f"❌ Error técnico: {str(e)}"
 
 # --- AQUÍ TERMINA LA FUNCIÓN LÓGICA ---
