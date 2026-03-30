@@ -566,7 +566,14 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
 
        # 7. GUARDAR
         callback_log("💾 Guardando archivo...")
-        wb.save(ruta_excel)
+        try:
+            wb.save(ruta_excel)
+        except Exception as err:
+            if "Bad file descriptor" in str(err) or "Errno 9" in str(err):
+                pass
+            else:
+                # Si es un error real de guardado, lo lanzamos hacia abajo
+                raise err
         
         callback_progreso(1.0)
         
