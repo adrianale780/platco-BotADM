@@ -567,7 +567,7 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
       # 7. GUARDAR
         callback_log("💾 Guardando archivo...")
         wb.save(ruta_excel)
-        wb.close()
+        #wb.close()#
         callback_progreso(1.0)
         
         return True, "\n".join(mensajes)
