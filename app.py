@@ -538,6 +538,16 @@ def lógica_negocio(ruta_excel, callback_log, callback_progreso):
                 
                 val_fecha = ws_data.cell(row=r, column=2).value
                 bs = limpiar_numero(ws_data.cell(row=r, column=7).value)
+
+                concepto_fila = str(ws_data.cell(row=r, column=6).value).upper()
+                
+                if "SALDO INICIAL" in concepto_fila:
+                    ws_data.cell(row=r, column=9).value = 1
+                else:
+                    if bs > 0:
+                        ws_data.cell(row=r, column=9).value = 2
+                    elif bs < 0:
+                        ws_data.cell(row=r, column=9).value = 3
                 
                 if val_fecha and bs != 0 and not ws_data.cell(row=r, column=8).value:
                     f_key = formatear_fecha_para_api(val_fecha)
